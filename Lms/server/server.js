@@ -28,30 +28,73 @@ const app = express();
 // WEBHOOKS MUST RECEIVE RAW BODY
 // =====================================================
 
-app.post("/clerk", express.raw({ type: "application/json" }), clerkWebhooks);
-app.post("/stripe", express.raw({ type: "application/json" }), stripeWebhooks);
+app.post(
+  "/clerk",
+  express.raw({ type: "application/json" }),
+  clerkWebhooks
+);
+
+app.post(
+  "/stripe",
+  express.raw({ type: "application/json" }),
+  stripeWebhooks
+);
 
 // =====================================================
 // BASIC MIDDLEWARE
 // =====================================================
 
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 
-app.use(clerkMiddleware({
-  publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
-  secretKey: process.env.CLERK_SECRET_KEY,
-}));
+app.use(
+  express.json({
+    limit: "2mb",
+  })
+);
 
-// Small in-memory guard for obvious API abuse. Use a shared store/rate limiter at scale.
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "2mb",
+  })
+);
+
+app.use(
+  clerkMiddleware({
+    publishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+    secretKey: process.env.CLERK_SECRET_KEY,
+  })
+);
+
+// =====================================================
+// SIMPLE API RATE LIMIT GUARD
+// =====================================================
+
 const requestCounts = new Map();
+
 app.use("/api", (req, res, next) => {
   const key = `${req.ip}:${Math.floor(Date.now() / 60000)}`;
+
   const count = (requestCounts.get(key) || 0) + 1;
+
   requestCounts.set(key, count);
-  if (requestCounts.size > 10000) requestCounts.clear();
-  if (count > 180) return res.status(429).json({ success: false, message: "Too many requests. Try again shortly." });
+
+  if (requestCounts.size > 10000) {
+    requestCounts.clear();
+  }
+
+  if (count > 180) {
+    return res.status(429).json({
+      success: false,
+      message: "Too many requests. Try again shortly.",
+    });
+  }
+
   next();
 });
 
@@ -64,7 +107,9 @@ app.use("/api/educator", educatorRouter);
 app.use("/api/course", courseRouter);
 
 app.use("/api/user", userRouter);
+
 app.use("/api/platform", platformRouter);
+
 app.use("/api/admin", adminRouter);
 
 // =====================================================
@@ -83,27 +128,66 @@ app.use((req, res) => {
 });
 
 // =====================================================
-// SERVER START
+// DATABASE / CLOUDINARY INITIALIZATION
+// =====================================================
+
+let initialized = false;
+
+const initializeServer = async () => {
+  if (initialized) {
+    return;
+  }
+
+  await connectDB();
+
+  await connectCloudinary();
+
+  initialized = true;
+
+  console.log("Server services initialized successfully");
+};
+
+// =====================================================
+// LOCAL DEVELOPMENT
 // =====================================================
 
 const PORT = process.env.PORT || 5000;
 
-const startServer = async () => {
-  try {
-    await connectDB();
-
-    await connectCloudinary();
-
-    app.listen(PORT, () => {
-      console.log(
-        `🚀 Server running on http://localhost:${PORT}`
-      );
+if (process.env.NODE_ENV !== "production") {
+  initializeServer()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(
+          `🚀 Server running on http://localhost:${PORT}`
+        );
+      });
+    })
+    .catch((error) => {
+      console.error("❌ Server failed:", error);
+      process.exit(1);
     });
-  } catch (error) {
-    console.error("❌ Server failed:", error);
+}
 
-    process.exit(1);
+// =====================================================
+// VERCEL SERVERLESS HANDLER
+// =====================================================
+
+const handler = async (req, res) => {
+  try {
+    await initializeServer();
+
+    return app(req, res);
+  } catch (error) {
+    console.error(
+      "❌ Server initialization failed:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Server initialization failed",
+    });
   }
 };
 
-startServer();
+export default handler;
