@@ -7,7 +7,7 @@ import fs from "fs";
 // UPLOAD DIRECTORY
 // =====================================================
 
-const uploadDir = "uploads/";
+const uploadDir = process.env.NODE_ENV === "production" ? "/tmp/" : "uploads/";
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, {
